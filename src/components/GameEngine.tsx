@@ -1,4 +1,6 @@
-import { useEffect, useRef, useState, useCallback } from "react";
+import React, { useEffect, useRef, useState, useCallback } from "react";
+
+// TODO: Read rooms API URL from func2url.json for multiplayer integration (to be done separately)
 
 interface CharDef {
   id: string; name: string; color: string; glow: string;
@@ -24,9 +26,7 @@ const BALL_R = 10;
 const EXIT_W = 28;
 const SPEED_SCALE = 0.22;
 const MANA_REGEN_MAX = 7;
-// Minimap
 const MM_W = 140, MM_H = 32, MM_X = 12, MM_Y = CANVAS_H - 12 - MM_H;
-// Teleport max distance in world px (5 "cells" = 5 * 40px grid)
 const TELEPORT_MAX_DIST = 200;
 
 function makeRoom(lvl: number): Room { return { width: 1800 + lvl * 250 }; }
@@ -68,14 +68,14 @@ export default function GameEngine({ character, onBack }: Props) {
   const [dead, setDead] = useState(false);
   const [showLevelUp, setShowLevelUp] = useState(false);
   const [stats, setStats] = useState<PlayerStats>(() => defaultStats(character));
-  // Frozen time (blue char ability 2)
   const [timeFrozen, setTimeFrozen] = useState(false);
+  const [cooldownsUI, setCooldownsUI] = useState<Record<string, number>>({});
 
   const st = useRef({
     px: 80, py: CORRIDOR_H / 2, vx: 0, vy: 0,
     camX: CANVAS_W / 2,
     keys: {} as Record<string, boolean>,
-    mouseX: 0, mouseY: 0, // screen coords
+    mouseX: 0, mouseY: 0,
     balls: [] as Ball[],
     room: null as Room | null,
     dead: false, level: 1,
@@ -83,11 +83,11 @@ export default function GameEngine({ character, onBack }: Props) {
     manaRegen: 1, mana: character.stats.manaMax, skillPoints: 0,
     abilities: character.abilities.map(a => ({ id: a.id, level: 0, active: false })) as AbilityState[],
     lastManaTime: 0,
-    // Per-ability drain timers
     abilityTimers: {} as Record<string, number>,
     timeFrozen: false,
     timeFreezeEnd: 0,
     frame: 0,
+    cooldowns: {} as Record<string, number>,  // key=abilityId, value=timestamp when cooldown ends (ms)
   });
 
   const animRef = useRef<number>(0);
@@ -106,6 +106,7 @@ export default function GameEngine({ character, onBack }: Props) {
     g.px = 80; g.py = CORRIDOR_H / 2; g.vx = 0; g.vy = 0;
     g.camX = Math.max(CANVAS_W / 2, 80);
     g.dead = false; g.level = lvl; g.timeFrozen = false;
+    g.cooldowns = {};
     for (const a of g.abilities) a.active = false;
   }, []);
 
@@ -146,16 +147,12 @@ export default function GameEngine({ character, onBack }: Props) {
     };
   });
 
-  const deactivateAbility = useCallback((id: string) => {
-    st.current.abilities.forEach(a => { if (a.id === id) a.active = false; });
-    setStats(prev => ({ ...prev, abilities: prev.abilities.map(a => a.id === id ? { ...a, active: false } : a) }));
-  }, []);
-
   useEffect(() => {
     initRoom(1);
     const g = st.current;
     g.lastManaTime = performance.now();
     g.abilityTimers = {};
+    g.cooldowns = {};
 
     const canvas = canvasRef.current!;
 
@@ -174,29 +171,37 @@ export default function GameEngine({ character, onBack }: Props) {
       if (e.key === "4") upgradeRef.current("4u");
       if (e.key === "5") upgradeRef.current("5u");
 
-      // Ability 1 activation (Z or J) — for both chars
+      // Ability 1 activation (Z or J)
       if (e.code === "KeyZ" || e.code === "KeyJ") {
         const ab1id = character.abilities[0]?.id;
         if (!ab1id) return;
         const ab = g.abilities.find(a => a.id === ab1id)!;
         if (ab.level === 0) return;
+        const now2 = performance.now();
 
         if (character.id === "red") {
-          // Boost: toggle
+          // boost: check cooldown before activating
+          const cdEnd = g.cooldowns[ab1id] ?? 0;
+          if (now2 < cdEnd) return; // on cooldown
           ab.active = !ab.active;
           const active = ab.active;
-          if (active) g.abilityTimers[ab1id] = performance.now();
+          if (active) g.abilityTimers[ab1id] = now2;
           setStats(prev => ({ ...prev, abilities: prev.abilities.map(a => a.id === ab1id ? { ...a, active } : a) }));
         }
         if (character.id === "red_brown") {
-          // Brown flow: toggle
+          const cdEnd = g.cooldowns[ab1id] ?? 0;
+          if (now2 < cdEnd) return;
           ab.active = !ab.active;
           const active = ab.active;
-          if (active) g.abilityTimers[ab1id] = performance.now();
+          if (active) g.abilityTimers[ab1id] = now2;
           setStats(prev => ({ ...prev, abilities: prev.abilities.map(a => a.id === ab1id ? { ...a, active } : a) }));
         }
         if (character.id === "blue") {
-          // Teleport: instant, costs 5 mana, max dist 200px world
+          // Teleport: blocked during time freeze
+          if (g.timeFrozen) return;
+          // Check cooldown
+          const cdEnd = g.cooldowns[ab1id] ?? 0;
+          if (now2 < cdEnd) return;
           if (g.mana < 5) return;
           const camOffX = CANVAS_W / 2 - g.camX;
           const worldMouseX = g.mouseX - camOffX;
@@ -207,11 +212,13 @@ export default function GameEngine({ character, onBack }: Props) {
           const ratio = dist > 0 ? clampedDist / dist : 0;
           let newX = g.px + dx * ratio;
           let newY = g.py + dy * ratio;
-          // Clamp inside corridor world bounds
           newX = Math.max(PLAYER_R, Math.min(g.room!.width - PLAYER_R, newX));
           newY = Math.max(PLAYER_R, Math.min(CORRIDOR_H - PLAYER_R, newY));
           g.px = newX; g.py = newY; g.vx = 0; g.vy = 0;
           g.mana = Math.max(0, g.mana - 5);
+          // Cooldown: 5 - (level - 1) seconds, level 1->5s, 2->4s, 3->3s, 4->2s, 5->1s
+          const tpCdSec = Math.max(1, 5 - (ab.level - 1));
+          g.cooldowns[ab1id] = now2 + tpCdSec * 1000;
         }
       }
 
@@ -221,20 +228,30 @@ export default function GameEngine({ character, onBack }: Props) {
         if (!ab2id) return;
         const ab = g.abilities.find(a => a.id === ab2id)!;
         if (ab.level === 0) return;
+        const now2 = performance.now();
 
         if (character.id === "red") {
-          // Brown flow: toggle
+          // brownflow: check cooldown before activating
+          const cdEnd = g.cooldowns[ab2id] ?? 0;
+          if (now2 < cdEnd) return;
+          const wasActive = ab.active;
           ab.active = !ab.active;
           const active = ab.active;
-          if (active) g.abilityTimers[ab2id] = performance.now();
+          if (active) {
+            g.abilityTimers[ab2id] = now2;
+          } else if (wasActive) {
+            // Apply brownflow cooldown on manual deactivation
+            const brownCDs = [1250, 1000, 750, 500, 250];
+            const cdMs = brownCDs[Math.max(0, ab.level - 1)] ?? 1250;
+            g.cooldowns[ab2id] = now2 + cdMs;
+          }
           setStats(prev => ({ ...prev, abilities: prev.abilities.map(a => a.id === ab2id ? { ...a, active } : a) }));
         }
         if (character.id === "blue") {
-          // Time freeze: 5 sec, 30 mana
           if (g.mana < 30 || g.timeFrozen) return;
           g.mana = Math.max(0, g.mana - 30);
           g.timeFrozen = true;
-          g.timeFreezeEnd = performance.now() + 5000;
+          g.timeFreezeEnd = now2 + 5000;
           setTimeFrozen(true);
           ab.active = true;
           setStats(prev => ({ ...prev, abilities: prev.abilities.map(a => a.id === ab2id ? { ...a, active: true } : a) }));
@@ -283,7 +300,16 @@ export default function GameEngine({ character, onBack }: Props) {
         if (drainRate > 0) {
           g.mana = Math.max(0, g.mana - drainRate * ae);
           g.abilityTimers[ab.id] = now;
-          if (g.mana <= 0) deactivateAbility(ab.id);
+          if (g.mana <= 0) {
+            ab.active = false;
+            // Apply brownflow cooldown on auto-deactivation (mana runs out)
+            if (ab.id === "brownflow") {
+              const brownCDs = [1250, 1000, 750, 500, 250];
+              const cdMs = brownCDs[Math.max(0, ab.level - 1)] ?? 1250;
+              g.cooldowns[ab.id] = now + cdMs;
+            }
+            setStats(prev => ({ ...prev, abilities: prev.abilities.map(a => a.id === ab.id ? { ...a, active: false } : a) }));
+          }
         }
       }
 
@@ -362,7 +388,7 @@ export default function GameEngine({ character, onBack }: Props) {
 
       const corrTop = CORRIDOR_TOP, corrBot = CORRIDOR_TOP + CORRIDOR_H;
 
-      // Dark outside
+      // Dark outside corridor
       ctx.fillStyle = "rgba(0,0,0,0.7)";
       ctx.fillRect(0, 0, CANVAS_W, corrTop);
       ctx.fillRect(0, corrBot, CANVAS_W, CANVAS_H - corrBot);
@@ -404,7 +430,7 @@ export default function GameEngine({ character, onBack }: Props) {
       ctx.beginPath(); ctx.moveTo(0, corrTop); ctx.lineTo(CANVAS_W, corrTop); ctx.stroke();
       ctx.beginPath(); ctx.moveTo(0, corrBot); ctx.lineTo(CANVAS_W, corrBot); ctx.stroke();
 
-      // Exit portal
+      // Exit
       const exitSX = room.width + camOffsetX;
       if (exitSX > 0 && exitSX < CANVAS_W + EXIT_W) {
         const grad = ctx.createLinearGradient(exitSX - EXIT_W, corrTop, exitSX, corrTop);
@@ -417,11 +443,11 @@ export default function GameEngine({ character, onBack }: Props) {
         ctx.beginPath(); ctx.moveTo(exitSX - 4, corrTop); ctx.lineTo(exitSX - 4, corrBot); ctx.stroke();
       }
 
-      // Distance label
+      // Distance to exit label
       ctx.fillStyle = "rgba(255,220,0,0.5)"; ctx.font = "11px 'Oswald', sans-serif"; ctx.textAlign = "right";
       ctx.fillText(`выход: ${Math.max(0, Math.round(room.width - g.px))}px`, CANVAS_W - 16, corrTop - 10);
 
-      // Teleport target indicator (blue char)
+      // Teleport ghost (blue char)
       if (character.id === "blue" && !g.dead) {
         const ab1 = g.abilities.find(a => a.id === character.abilities[0]?.id);
         if (ab1 && ab1.level > 0) {
@@ -450,7 +476,6 @@ export default function GameEngine({ character, onBack }: Props) {
         const bsx = b.x + camOffsetX, bsy = b.y + corrTop;
         if (bsx < -b.r * 2 || bsx > CANVAS_W + b.r * 2) continue;
         ctx.save();
-        // Frozen glow tint
         const ballColor0 = g.timeFrozen ? "#8ab4ff" : "#cccccc";
         const ballColor1 = g.timeFrozen ? "#3366bb" : "#555555";
         const bglow = ctx.createRadialGradient(bsx, bsy, 0, bsx, bsy, b.r * 2.5);
@@ -513,7 +538,17 @@ export default function GameEngine({ character, onBack }: Props) {
       ctx.beginPath(); ctx.arc(MM_X + mmPad + g.px * scX, MM_Y + mmPad + g.py * scY, 3, 0, Math.PI * 2); ctx.fill();
       ctx.restore();
 
-      // Sync mana
+      // Sync cooldowns to UI every 6 frames
+      if (g.frame % 6 === 0) {
+        const cds = g.cooldowns;
+        const uiCDs: Record<string, number> = {};
+        for (const [id, endMs] of Object.entries(cds)) {
+          const rem = Math.max(0, (endMs - now) / 1000);
+          if (rem > 0) uiCDs[id] = rem;
+        }
+        setCooldownsUI(uiCDs);
+      }
+
       if (g.frame % 6 === 0) {
         const lm = Math.round(g.mana * 10) / 10;
         setStats(prev => Math.abs(prev.mana - lm) < 0.01 ? prev : { ...prev, mana: lm });
@@ -536,9 +571,16 @@ export default function GameEngine({ character, onBack }: Props) {
     ? Math.max(0, Math.ceil((st.current.timeFreezeEnd - performance.now()) / 1000))
     : 0;
 
+  // Tooltip text per ability
+  const TOOLTIPS: Record<string, string> = {
+    boost: "Ускорение потока\n+2/3/4/5/6 скорости\nТратит: 2 маны/с",
+    brownflow: "Коричневый поток\nМощный поток силы\nТратит: 12 маны/с\nОткат после выкл: 1.25/1/0.75/0.5/0.25 с",
+    teleport: "Телепорт на курсор\nМакс. 5 клеток (200px)\nСтоит: 5 маны\nПерезарядка: 5/4/3/2/1 с",
+    timefreeze: "Остановка времени\n5 секунд\nСтоит: 30 маны\nОтключает телепорт",
+  };
+
   return (
     <div className="min-h-screen flex flex-col items-center justify-center" style={{ background: "#0d0d0f", fontFamily: "'Oswald', sans-serif" }}>
-      {/* Top bar */}
       <div className="flex items-center justify-between w-full px-6 py-3" style={{ maxWidth: CANVAS_W + 40 }}>
         <button onClick={onBack} className="text-xs tracking-widest uppercase"
           style={{ color: "rgba(255,255,255,0.3)" }}
@@ -559,7 +601,6 @@ export default function GameEngine({ character, onBack }: Props) {
         </div>
       </div>
 
-      {/* Canvas */}
       <div className="relative" style={{ width: CANVAS_W, border: "1px solid rgba(255,255,255,0.07)" }}>
         <canvas ref={canvasRef} width={CANVAS_W} height={CANVAS_H} style={{ display: "block" }} />
 
@@ -574,6 +615,8 @@ export default function GameEngine({ character, onBack }: Props) {
               const g = st.current;
               Object.assign(g, { mana: fresh.mana, speedBase: fresh.speedBase, manaMax: fresh.manaMax, manaRegen: fresh.manaRegen, skillPoints: 0, timeFrozen: false });
               g.abilities = fresh.abilities.map(a => ({ ...a }));
+              g.cooldowns = {};
+              setCooldownsUI({});
               initRoom(1);
             }}
               className="mt-3 px-10 py-2 text-sm font-bold tracking-[0.3em] uppercase"
@@ -591,11 +634,9 @@ export default function GameEngine({ character, onBack }: Props) {
         )}
       </div>
 
-      {/* HUD */}
       <div className="flex items-stretch gap-0 w-full"
         style={{ maxWidth: CANVAS_W, background: "rgba(0,0,0,0.6)", border: "1px solid rgba(255,255,255,0.06)", borderTop: "none" }}
       >
-        {/* Skill points */}
         <div className="flex flex-col items-center justify-center px-4 py-2" style={{ borderRight: "1px solid rgba(255,255,255,0.06)", minWidth: 64 }}>
           <div style={{ position: "relative", display: "inline-flex" }}>
             <div className="rounded-full" style={{ width: 22, height: 22, background: stats.skillPoints > 0 ? "#ffd700" : "rgba(255,215,0,0.15)", boxShadow: stats.skillPoints > 0 ? "0 0 12px rgba(255,215,0,0.8)" : "none", transition: "all 0.3s" }} />
@@ -624,6 +665,7 @@ export default function GameEngine({ character, onBack }: Props) {
         {character.abilities.map((ab, idx) => {
           const abState = stats.abilities.find(a => a.id === ab.id)!;
           const canUp = stats.skillPoints > 0 && abState.level < 5;
+          const cdSec = cooldownsUI[ab.id] ?? 0;
           return (
             <AbilityBlock
               key={ab.id}
@@ -637,6 +679,8 @@ export default function GameEngine({ character, onBack }: Props) {
               activeColor={ab.color}
               canUpgrade={canUp}
               isLast={idx === character.abilities.length - 1}
+              cooldownSec={cdSec}
+              tooltip={TOOLTIPS[ab.id]}
             />
           );
         })}
@@ -673,18 +717,66 @@ function ManaBar({ current, max }: { current: number; max: number }) {
   );
 }
 
-function AbilityBlock({ keyUpgrade, keyUse, name, abilityLevel, active, locked, color, activeColor, canUpgrade, isLast }: {
+function AbilityBlock({ keyUpgrade, keyUse, name, abilityLevel, active, locked, color, activeColor, canUpgrade, isLast, cooldownSec, tooltip }: {
   keyUpgrade: string; keyUse: string; name: string; abilityLevel: number; active: boolean;
   locked: boolean; color: string; activeColor: string; canUpgrade: boolean; isLast: boolean;
+  cooldownSec?: number; tooltip?: string;
 }) {
+  const [hovered, setHovered] = useState(false);
+  const onCooldown = (cooldownSec ?? 0) > 0;
   return (
-    <div className="flex flex-col items-center justify-center px-4 py-2" style={{ minWidth: 130, borderRight: isLast ? "none" : "1px solid rgba(255,255,255,0.06)" }}>
+    <div
+      className="flex flex-col items-center justify-center px-4 py-2 relative"
+      style={{ minWidth: 130, borderRight: isLast ? "none" : "1px solid rgba(255,255,255,0.06)" }}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+    >
+      {/* Tooltip */}
+      {hovered && tooltip && (
+        <div style={{
+          position: "absolute",
+          bottom: "calc(100% + 8px)",
+          left: "50%",
+          transform: "translateX(-50%)",
+          background: "rgba(10,10,15,0.96)",
+          border: "1px solid rgba(255,255,255,0.1)",
+          padding: "8px 12px",
+          fontSize: 10,
+          color: "rgba(255,255,255,0.7)",
+          whiteSpace: "pre-line",
+          lineHeight: 1.6,
+          pointerEvents: "none",
+          zIndex: 100,
+          minWidth: 180,
+          fontFamily: "Golos Text, sans-serif",
+          textAlign: "left",
+          boxShadow: "0 4px 20px rgba(0,0,0,0.6)",
+        }}>
+          {tooltip}
+        </div>
+      )}
+
       <div className="flex items-center gap-1.5 mb-1">
         <span style={{ background: canUpgrade ? "rgba(255,215,0,0.15)" : "rgba(255,255,255,0.05)", color: canUpgrade ? "#ffd700" : "rgba(255,255,255,0.2)", border: canUpgrade ? "1px solid rgba(255,215,0,0.3)" : "1px solid rgba(255,255,255,0.06)", fontSize: 9, padding: "1px 4px" }}>[{keyUpgrade}]</span>
         <span style={{ color: locked ? "rgba(255,255,255,0.15)" : "rgba(255,255,255,0.4)", fontSize: 8, letterSpacing: "0.1em" }}>{name}</span>
-        <span style={{ background: active ? `${activeColor}22` : "rgba(255,255,255,0.05)", color: locked ? "rgba(255,255,255,0.1)" : (active ? activeColor : "rgba(255,255,255,0.35)"), border: `1px solid ${locked ? "rgba(255,255,255,0.06)" : (active ? activeColor : "rgba(255,255,255,0.1)")}`, fontSize: 9, padding: "1px 4px" }}>[{keyUse}]</span>
+        <span style={{ background: (active && !onCooldown) ? `${activeColor}22` : "rgba(255,255,255,0.05)", color: locked ? "rgba(255,255,255,0.1)" : (active && !onCooldown ? activeColor : "rgba(255,255,255,0.35)"), border: `1px solid ${locked ? "rgba(255,255,255,0.06)" : (active && !onCooldown ? activeColor : "rgba(255,255,255,0.1)")}`, fontSize: 9, padding: "1px 4px" }}>[{keyUse}]</span>
       </div>
-      <div className="rounded-full" style={{ width: 18, height: 18, marginBottom: 4, background: locked ? "rgba(255,255,255,0.05)" : (active ? activeColor : color), boxShadow: active ? `0 0 10px ${activeColor}` : "none", border: locked ? "1px solid rgba(255,255,255,0.08)" : `1px solid ${activeColor}66`, transition: "all 0.3s" }} />
+
+      {/* Icon with cooldown overlay */}
+      <div style={{ position: "relative", width: 20, height: 20, marginBottom: 4 }}>
+        <div className="rounded-full" style={{ width: 20, height: 20, background: locked ? "rgba(255,255,255,0.05)" : (active && !onCooldown ? activeColor : color), boxShadow: (active && !onCooldown) ? `0 0 10px ${activeColor}` : "none", border: locked ? "1px solid rgba(255,255,255,0.08)" : `1px solid ${activeColor}66`, transition: "all 0.3s" }} />
+        {onCooldown && (
+          <div style={{
+            position: "absolute", inset: 0, borderRadius: "50%",
+            background: "rgba(0,0,0,0.72)",
+            display: "flex", alignItems: "center", justifyContent: "center",
+            fontSize: 7, fontWeight: "bold", color: "#fff",
+          }}>
+            {(cooldownSec ?? 0) < 10 ? (cooldownSec ?? 0).toFixed(1) : Math.ceil(cooldownSec ?? 0)}
+          </div>
+        )}
+      </div>
+
       <div className="flex gap-1">
         {[0,1,2,3,4].map(i => (
           <div key={i} className="rounded-full" style={{ width: 5, height: 5, background: i < abilityLevel ? "#ffd700" : "rgba(255,255,255,0.1)", boxShadow: i < abilityLevel ? "0 0 4px rgba(255,215,0,0.6)" : "none", transition: "all 0.3s" }} />

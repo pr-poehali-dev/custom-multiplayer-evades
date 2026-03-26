@@ -1,0 +1,22 @@
+{
+  "tests": [
+    {
+      "name": "Create room",
+      "method": "POST",
+      "path": "/rooms",
+      "headers": { "X-Player-Id": "test-player-1", "Content-Type": "application/json" },
+      "body": { "character": { "id": "red", "name": "VERMILLON", "color": "#ff3344" } },
+      "expectedStatus": 200,
+      "expectedBody": { "code": "string" },
+      "bodyMatcher": "partial"
+    },
+    {
+      "name": "Get room not found",
+      "method": "GET",
+      "path": "/rooms/XXXXXX",
+      "expectedStatus": 200,
+      "expectedBody": { "players": [] },
+      "bodyMatcher": "partial"
+    }
+  ]
+}
