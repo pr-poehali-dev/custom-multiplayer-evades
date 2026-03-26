@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState, useCallback } from "react";
 
-// TODO: Read rooms API URL from func2url.json for multiplayer integration (to be done separately)
+const ROOMS_URL = "https://functions.poehali.dev/2defc3c7-a0de-4530-b005-9363bbfb56f3";
 
 interface CharDef {
   id: string; name: string; color: string; glow: string;
@@ -11,7 +11,8 @@ interface CharAbilityDef {
   id: string; name: string; keyUpgrade: string; keyUse: string;
   desc: string; color: string;
 }
-interface Props { character: CharDef; onBack: () => void; }
+interface RemotePlayer { player_id: string; char_name: string; char_color: string; px: number; py: number; dead: boolean; }
+interface Props { character: CharDef; onBack: () => void; roomCode?: string; playerId?: string; }
 
 interface Ball { id: number; x: number; y: number; vx: number; vy: number; r: number; }
 interface Room { width: number; }
@@ -62,7 +63,7 @@ function defaultStats(char: CharDef): PlayerStats {
 
 function boostSpeedBonus(lvl: number): number { return lvl > 0 ? 1 + lvl : 0; }
 
-export default function GameEngine({ character, onBack }: Props) {
+export default function GameEngine({ character, onBack, roomCode, playerId }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [level, setLevel] = useState(1);
   const [dead, setDead] = useState(false);
@@ -70,6 +71,9 @@ export default function GameEngine({ character, onBack }: Props) {
   const [stats, setStats] = useState<PlayerStats>(() => defaultStats(character));
   const [timeFrozen, setTimeFrozen] = useState(false);
   const [cooldownsUI, setCooldownsUI] = useState<Record<string, number>>({});
+  const [remotePlayers, setRemotePlayers] = useState<RemotePlayer[]>([]);
+  const remotePlayersRef = useRef<RemotePlayer[]>([]);
+  const mpPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const st = useRef({
     px: 80, py: CORRIDOR_H / 2, vx: 0, vy: 0,
@@ -146,6 +150,47 @@ export default function GameEngine({ character, onBack }: Props) {
       });
     };
   });
+
+  // ── Multiplayer: poll room state & push position ───────────────────────────
+  useEffect(() => {
+    if (!roomCode || !playerId) return;
+
+    const pushState = async () => {
+      const g = st.current;
+      try {
+        await fetch(`${ROOMS_URL}/rooms/state`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json", "X-Player-Id": playerId },
+          body: JSON.stringify({ code: roomCode, px: Math.round(g.px), py: Math.round(g.py), dead: g.dead }),
+        });
+      } catch { /* ignore */ }
+    };
+
+    const pollState = async () => {
+      try {
+        const res = await fetch(`${ROOMS_URL}/rooms/${roomCode}`, {
+          headers: { "X-Player-Id": playerId },
+        });
+        if (!res.ok) return;
+        const data = await res.json();
+        const others = (data.players ?? []).filter((p: RemotePlayer) => p.player_id !== playerId);
+        remotePlayersRef.current = others;
+        setRemotePlayers(others);
+      } catch { /* ignore */ }
+    };
+
+    // Push every 100ms, poll every 200ms
+    const pushInterval = setInterval(pushState, 100);
+    const pollInterval = setInterval(pollState, 200);
+    mpPollRef.current = pollInterval;
+    pollState();
+
+    return () => {
+      clearInterval(pushInterval);
+      clearInterval(pollInterval);
+    };
+   
+  }, [roomCode, playerId]);
 
   useEffect(() => {
     initRoom(1);
@@ -346,8 +391,31 @@ export default function GameEngine({ character, onBack }: Props) {
         const minCam = CANVAS_W / 2, maxCam = room.width - CANVAS_W / 2;
         g.camX = Math.max(minCam, Math.min(maxCam > minCam ? maxCam : minCam, g.px));
 
-        // Collision (skip during time freeze)
-        if (!g.timeFrozen) {
+        // Collision
+        if (g.timeFrozen && character.id === "blue") {
+          // Таймстоп: физическое столкновение без смерти — отталкиваем игрока
+          for (const b of g.balls) {
+            const dx = g.px - b.x, dy = g.py - b.y;
+            const dist = Math.sqrt(dx * dx + dy * dy);
+            const minDist = b.r + PLAYER_R;
+            if (dist < minDist && dist > 0) {
+              const nx = dx / dist, ny = dy / dist;
+              const overlap = minDist - dist;
+              g.px += nx * overlap;
+              g.py += ny * overlap;
+              // Гасим скорость в направлении шара
+              const dot = g.vx * nx + g.vy * ny;
+              if (dot < 0) {
+                g.vx -= dot * nx;
+                g.vy -= dot * ny;
+              }
+            }
+          }
+          // Пережимаем в коридор после столкновений
+          g.py = Math.max(PLAYER_R, Math.min(CORRIDOR_H - PLAYER_R, g.py));
+          if (g.px < PLAYER_R) { g.px = PLAYER_R; g.vx = 0; }
+          if (g.px > room.width - PLAYER_R) { g.px = room.width - PLAYER_R; g.vx = 0; }
+        } else if (!g.timeFrozen) {
           for (const b of g.balls) {
             const dx = b.x - g.px, dy = b.y - g.py;
             if (Math.sqrt(dx * dx + dy * dy) < b.r + PLAYER_R) {
@@ -447,8 +515,8 @@ export default function GameEngine({ character, onBack }: Props) {
       ctx.fillStyle = "rgba(255,220,0,0.5)"; ctx.font = "11px 'Oswald', sans-serif"; ctx.textAlign = "right";
       ctx.fillText(`выход: ${Math.max(0, Math.round(room.width - g.px))}px`, CANVAS_W - 16, corrTop - 10);
 
-      // Teleport ghost (blue char)
-      if (character.id === "blue" && !g.dead) {
+      // Teleport ghost (blue char) — скрыт во время таймстопа
+      if (character.id === "blue" && !g.dead && !g.timeFrozen) {
         const ab1 = g.abilities.find(a => a.id === character.abilities[0]?.id);
         if (ab1 && ab1.level > 0) {
           const camOffX2 = CANVAS_W / 2 - g.camX;
@@ -515,6 +583,25 @@ export default function GameEngine({ character, onBack }: Props) {
         ctx.moveTo(psx - PLAYER_R, psy - PLAYER_R); ctx.lineTo(psx + PLAYER_R, psy + PLAYER_R);
         ctx.moveTo(psx + PLAYER_R, psy - PLAYER_R); ctx.lineTo(psx - PLAYER_R, psy + PLAYER_R);
         ctx.stroke(); ctx.restore();
+      }
+
+      // Remote players (multiplayer)
+      for (const rp of remotePlayersRef.current) {
+        if (rp.dead) continue;
+        const rpsx = rp.px + camOffsetX;
+        const rpsy = rp.py + corrTop;
+        if (rpsx < -PLAYER_R * 4 || rpsx > CANVAS_W + PLAYER_R * 4) continue;
+        ctx.save();
+        const rpGlow = ctx.createRadialGradient(rpsx, rpsy, 0, rpsx, rpsy, PLAYER_R * 2.5);
+        rpGlow.addColorStop(0, `${rp.char_color}88`); rpGlow.addColorStop(1, "transparent");
+        ctx.fillStyle = rpGlow; ctx.beginPath(); ctx.arc(rpsx, rpsy, PLAYER_R * 2.5, 0, Math.PI * 2); ctx.fill();
+        ctx.fillStyle = rp.char_color;
+        ctx.beginPath(); ctx.arc(rpsx, rpsy, PLAYER_R, 0, Math.PI * 2); ctx.fill();
+        // Name tag
+        ctx.fillStyle = "rgba(255,255,255,0.6)";
+        ctx.font = "8px 'Oswald', sans-serif"; ctx.textAlign = "center";
+        ctx.fillText(rp.char_name, rpsx, rpsy - PLAYER_R - 4);
+        ctx.restore();
       }
 
       // Minimap

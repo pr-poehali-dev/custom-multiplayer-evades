@@ -32,7 +32,7 @@ export const CHARACTERS: CharDef[] = [
     color: "#3399ff",
     glow: "rgba(51,153,255,0.6)",
     desc: "Повелитель пространства",
-    stats: { speed: 4, manaMax: 30, manaRegen: 1 },
+    stats: { speed: 5, manaMax: 30, manaRegen: 1 },
     abilities: [
       { id: "teleport", name: "ТЕЛЕПОРТ", keyUpgrade: "4", keyUse: "Z/J", desc: "На курсор (≤5 клеток), -5 маны", color: "#44aaff" },
       { id: "timefreeze", name: "СТОП-ВРЕМЯ", keyUpgrade: "5", keyUse: "X/K", desc: "5 сек остановки, -30 маны", color: "#88ddff" },
@@ -53,7 +53,7 @@ export default function Index() {
 
   if (screen === "team" && selected) {
     const char = CHARACTERS.find((c) => c.id === selected)!;
-    return <TeamLobby character={char} onBack={() => setScreen("menu")} onStartSolo={() => setScreen("game")} />;
+    return <TeamLobby character={char} onBack={() => setScreen("menu")} />;
   }
 
   return (
