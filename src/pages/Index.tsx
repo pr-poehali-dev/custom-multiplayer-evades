@@ -9,7 +9,7 @@ export const CHARACTERS = [
     glow: "rgba(255,51,68,0.6)",
     desc: "Базовый боец",
     ability: "Нет способностей",
-    stats: { speed: 5, manaMax: 10, manaRegen: 0.1 },
+    stats: { speed: 5, manaMax: 10, manaRegen: 1 },
   },
 ];
 
@@ -181,30 +181,24 @@ export default function Index() {
             ИГРАТЬ
           </button>
 
-          {/* Controls */}
-          <div className="flex gap-7" style={{ fontFamily: "Golos Text, sans-serif" }}>
-            {[
-              { key: "WASD", desc: "движение" },
-              { key: "Жёлтый вход", desc: "след. уровень" },
-              { key: "1 мин.", desc: "время на подъём" },
-            ].map((h) => (
-              <div key={h.key} className="flex flex-col items-center gap-1">
-                <span
-                  className="px-2 py-0.5 text-xs font-bold"
-                  style={{
-                    background: "rgba(255,255,255,0.05)",
-                    color: "rgba(255,255,255,0.4)",
-                    border: "1px solid rgba(255,255,255,0.07)",
-                    letterSpacing: "0.06em",
-                  }}
-                >
-                  {h.key}
-                </span>
-                <span className="text-xs" style={{ color: "rgba(255,255,255,0.18)", letterSpacing: "0.05em" }}>
-                  {h.desc}
-                </span>
-              </div>
-            ))}
+          {/* Controls — only movement hint */}
+          <div style={{ fontFamily: "Golos Text, sans-serif" }}>
+            <div className="flex flex-col items-center gap-1">
+              <span
+                className="px-2 py-0.5 text-xs font-bold"
+                style={{
+                  background: "rgba(255,255,255,0.05)",
+                  color: "rgba(255,255,255,0.4)",
+                  border: "1px solid rgba(255,255,255,0.07)",
+                  letterSpacing: "0.06em",
+                }}
+              >
+                WASD
+              </span>
+              <span className="text-xs" style={{ color: "rgba(255,255,255,0.18)", letterSpacing: "0.05em" }}>
+                движение
+              </span>
+            </div>
           </div>
         </div>
       </div>
