@@ -4,11 +4,11 @@ import GameEngine from "@/components/GameEngine";
 export const CHARACTERS = [
   {
     id: "red",
-    name: "SCARLET",
+    name: "VERMILLON",
     color: "#ff3344",
     glow: "rgba(255,51,68,0.6)",
-    desc: "Базовый боец",
-    ability: "Нет способностей",
+    desc: "Мастер потока",
+    ability: "Ускорение [Z/J]",
     stats: { speed: 5, manaMax: 10, manaRegen: 1 },
   },
 ];

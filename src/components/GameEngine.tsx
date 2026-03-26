@@ -10,7 +10,7 @@ interface Ball { id: number; x: number; y: number; vx: number; vy: number; r: nu
 interface Room { width: number; }
 
 const SAFE_ZONE = 200;
-const CORRIDOR_H = 110; // ~half of previous 220
+const CORRIDOR_H = 220;
 const CANVAS_W = 900;
 const CANVAS_H = 400;
 const CORRIDOR_TOP = (CANVAS_H - CORRIDOR_H) / 2;
@@ -143,7 +143,12 @@ export default function GameEngine({ character, onBack }: Props) {
       if (e.key === "1") upgradeRef.current("1");
       if (e.key === "2") upgradeRef.current("2");
       if (e.key === "3") upgradeRef.current("3");
+      // 4 — только прокачка способности
       if (e.key === "4") {
+        upgradeRef.current("4u");
+      }
+      // Z или J — использование ускорения (вкл/выкл)
+      if (e.code === "KeyZ" || e.code === "KeyJ") {
         const st = s.current;
         const boost = st.abilities.find(a => a.id === "boost")!;
         if (boost.level > 0) {
@@ -151,8 +156,6 @@ export default function GameEngine({ character, onBack }: Props) {
           const active = boost.active;
           if (active) st.lastAbilityManaTime = performance.now();
           setStats(prev => ({ ...prev, abilities: prev.abilities.map(a => a.id === "boost" ? { ...a, active } : a) }));
-        } else {
-          upgradeRef.current("4u");
         }
       }
     };
@@ -549,7 +552,7 @@ export default function GameEngine({ character, onBack }: Props) {
         <div style={{ width: 1, background: "rgba(255,255,255,0.06)" }} />
 
         <AbilityBlock
-          keyHint="4" name="УСКОРЕНИЕ"
+          keyUpgrade="4" keyUse="Z/J" name="УСКОРЕНИЕ"
           abilityLevel={boostAbility.level} active={boostAbility.active}
           locked={boostAbility.level === 0}
           color={boostAbility.active ? "#ff9900" : "#ff4444"}
@@ -558,7 +561,7 @@ export default function GameEngine({ character, onBack }: Props) {
       </div>
 
       <div className="mt-3 text-xs tracking-[0.25em] uppercase" style={{ color: "rgba(255,255,255,0.1)" }}>
-        WASD — движение · SHIFT — медленно · 1/2/3 — прокачка · 4 — ускорение
+        WASD — движение · SHIFT — медленно · 1/2/3 — прокачка стата · 4 — прокачать ускорение · Z/J — вкл/выкл ускорение
       </div>
     </div>
   );
@@ -590,17 +593,22 @@ function ManaBar({ current, max }: { current: number; max: number }) {
   );
 }
 
-function AbilityBlock({ keyHint, name, abilityLevel, active, locked, color, canUpgrade }: {
-  keyHint: string; name: string; abilityLevel: number; active: boolean;
+function AbilityBlock({ keyUpgrade, keyUse, name, abilityLevel, active, locked, color, canUpgrade }: {
+  keyUpgrade: string; keyUse: string; name: string; abilityLevel: number; active: boolean;
   locked: boolean; color: string; canUpgrade: boolean;
 }) {
   return (
-    <div className="flex flex-col items-center justify-center px-5 py-2" style={{ minWidth: 120 }}>
+    <div className="flex flex-col items-center justify-center px-5 py-2" style={{ minWidth: 140 }}>
       <div className="flex items-center gap-2 mb-1">
-        <span style={{ background: "rgba(255,255,255,0.05)", color: locked ? "rgba(255,255,255,0.15)" : (active ? color : "rgba(255,255,255,0.4)"), border: `1px solid ${locked ? "rgba(255,255,255,0.06)" : (active ? color : "rgba(255,255,255,0.1)")}`, fontSize: 9, padding: "1px 4px" }}>
-          [{keyHint}]
+        {/* Upgrade key */}
+        <span style={{ background: canUpgrade ? "rgba(255,215,0,0.15)" : "rgba(255,255,255,0.05)", color: canUpgrade ? "#ffd700" : "rgba(255,255,255,0.2)", border: canUpgrade ? "1px solid rgba(255,215,0,0.35)" : "1px solid rgba(255,255,255,0.06)", fontSize: 9, padding: "1px 4px" }}>
+          [{keyUpgrade}]
         </span>
         <span style={{ color: locked ? "rgba(255,255,255,0.15)" : "rgba(255,255,255,0.4)", fontSize: 8, letterSpacing: "0.1em" }}>{name}</span>
+        {/* Use key */}
+        <span style={{ background: active ? `${color}22` : "rgba(255,255,255,0.05)", color: locked ? "rgba(255,255,255,0.1)" : (active ? color : "rgba(255,255,255,0.35)"), border: `1px solid ${locked ? "rgba(255,255,255,0.06)" : (active ? color : "rgba(255,255,255,0.1)")}`, fontSize: 9, padding: "1px 4px" }}>
+          [{keyUse}]
+        </span>
       </div>
       <div className="rounded-full" style={{ width: 20, height: 20, marginBottom: 4, background: locked ? "rgba(255,255,255,0.05)" : (active ? color : `${color}55`), boxShadow: active ? `0 0 10px ${color}` : "none", border: locked ? "1px solid rgba(255,255,255,0.08)" : `1px solid ${color}66`, transition: "all 0.3s" }} />
       <div className="flex gap-1">
@@ -608,7 +616,7 @@ function AbilityBlock({ keyHint, name, abilityLevel, active, locked, color, canU
           <div key={i} className="rounded-full" style={{ width: 6, height: 6, background: i < abilityLevel ? "#ffd700" : "rgba(255,255,255,0.1)", boxShadow: i < abilityLevel ? "0 0 4px rgba(255,215,0,0.6)" : "none", transition: "all 0.3s" }} />
         ))}
       </div>
-      {locked && canUpgrade && <div style={{ color: "#ffd700", fontSize: 7, marginTop: 3 }}>НАЖМИ [4]</div>}
+      {locked && canUpgrade && <div style={{ color: "#ffd700", fontSize: 7, marginTop: 3 }}>НАЖМИ [4] ЧТОБЫ ОТКРЫТЬ</div>}
       {locked && !canUpgrade && <div style={{ color: "rgba(255,255,255,0.15)", fontSize: 7, marginTop: 3 }}>LOCKED</div>}
     </div>
   );
