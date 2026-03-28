@@ -158,18 +158,20 @@ export default function GameEngine({ character, onBack, roomCode, playerId }: Pr
     const pushState = async () => {
       const g = st.current;
       try {
-        await fetch(`${ROOMS_URL}/state`, {
+        await fetch(ROOMS_URL, {
           method: "PUT",
           headers: { "Content-Type": "application/json", "X-Player-Id": playerId },
-          body: JSON.stringify({ code: roomCode, px: Math.round(g.px), py: Math.round(g.py), dead: g.dead }),
+          body: JSON.stringify({ action: "state", code: roomCode, px: Math.round(g.px), py: Math.round(g.py), dead: g.dead }),
         });
       } catch { /* ignore */ }
     };
 
     const pollState = async () => {
       try {
-        const res = await fetch(`${ROOMS_URL}/${roomCode}`, {
-          headers: { "X-Player-Id": playerId },
+        const res = await fetch(ROOMS_URL, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "X-Player-Id": playerId },
+          body: JSON.stringify({ action: "poll", code: roomCode }),
         });
         if (!res.ok) return;
         const data = await res.json();
@@ -228,13 +230,22 @@ export default function GameEngine({ character, onBack, roomCode, playerId }: Pr
           // boost: check cooldown before activating
           const cdEnd = g.cooldowns[ab1id] ?? 0;
           if (now2 < cdEnd) return;
-          // Нельзя включить boost если brownflow активен
+          // Если brownflow активен — выключаем его и включаем boost
           const brownAbNow = g.abilities.find(a => a.id === "brownflow");
-          if (brownAbNow?.active) return;
+          if (brownAbNow?.active) {
+            brownAbNow.active = false;
+            const brownCDs = [1250, 1000, 750, 500, 250];
+            const cdMs = brownCDs[Math.max(0, brownAbNow.level - 1)] ?? 1250;
+            g.cooldowns["brownflow"] = now2 + cdMs;
+          }
           ab.active = !ab.active;
           const active = ab.active;
           if (active) g.abilityTimers[ab1id] = now2;
-          setStats(prev => ({ ...prev, abilities: prev.abilities.map(a => a.id === ab1id ? { ...a, active } : a) }));
+          setStats(prev => ({ ...prev, abilities: prev.abilities.map(a => {
+            if (a.id === ab1id) return { ...a, active };
+            if (a.id === "brownflow") return { ...a, active: false };
+            return a;
+          }) }));
         }
         if (character.id === "red_brown") {
           const cdEnd = g.cooldowns[ab1id] ?? 0;
@@ -284,21 +295,26 @@ export default function GameEngine({ character, onBack, roomCode, playerId }: Pr
           // brownflow: check cooldown before activating
           const cdEnd = g.cooldowns[ab2id] ?? 0;
           if (now2 < cdEnd) return;
-          // Нельзя включить brownflow если boost активен
+          // Если boost активен — выключаем его и включаем brownflow
           const boostAbNow = g.abilities.find(a => a.id === "boost");
-          if (!ab.active && boostAbNow?.active) return;
+          if (!ab.active && boostAbNow?.active) {
+            boostAbNow.active = false;
+          }
           const wasActive = ab.active;
           ab.active = !ab.active;
           const active = ab.active;
           if (active) {
             g.abilityTimers[ab2id] = now2;
           } else if (wasActive) {
-            // Apply brownflow cooldown on manual deactivation
             const brownCDs = [1250, 1000, 750, 500, 250];
             const cdMs = brownCDs[Math.max(0, ab.level - 1)] ?? 1250;
             g.cooldowns[ab2id] = now2 + cdMs;
           }
-          setStats(prev => ({ ...prev, abilities: prev.abilities.map(a => a.id === ab2id ? { ...a, active } : a) }));
+          setStats(prev => ({ ...prev, abilities: prev.abilities.map(a => {
+            if (a.id === ab2id) return { ...a, active };
+            if (a.id === "boost") return { ...a, active: false };
+            return a;
+          }) }));
         }
         if (character.id === "blue") {
           const cdEnd2 = g.cooldowns[ab2id] ?? 0;

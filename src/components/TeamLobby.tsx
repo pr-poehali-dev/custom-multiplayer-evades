@@ -51,16 +51,29 @@ export default function TeamLobby({ character, onBack }: Props) {
     if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; }
   }, []);
 
+  const keepAlive = useCallback(async (code: string) => {
+    try {
+      await fetch(ROOMS_URL, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json", "X-Player-Id": playerId.current },
+        body: JSON.stringify({ action: "state", code, px: 80, py: 110, dead: false }),
+      });
+    } catch { /* ignore */ }
+  }, []);
+
   const pollRoom = useCallback(async (code: string) => {
     try {
-      const res = await fetch(`${ROOMS_URL}/${code}`, {
-        headers: { "X-Player-Id": playerId.current },
+      keepAlive(code);
+      const res = await fetch(ROOMS_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Player-Id": playerId.current },
+        body: JSON.stringify({ action: "poll", code }),
       });
       if (!res.ok) return;
       const data = await res.json();
       setPlayers(data.players ?? []);
     } catch { /* ignore */ }
-  }, []);
+  }, [keepAlive]);
 
   const startPolling = useCallback((code: string) => {
     stopPoll();
@@ -96,10 +109,10 @@ export default function TeamLobby({ character, onBack }: Props) {
     if (code.length !== 6) { setJoinError("Код должен быть 6 символов"); return; }
     setLoading(true); setJoinError(""); setError("");
     try {
-      const res = await fetch(`${ROOMS_URL}/join`, {
+      const res = await fetch(ROOMS_URL, {
         method: "POST",
         headers: { "Content-Type": "application/json", "X-Player-Id": playerId.current },
-        body: JSON.stringify({ code, character: { id: character.id, name: character.name, color: character.color } }),
+        body: JSON.stringify({ action: "join", code, character: { id: character.id, name: character.name, color: character.color } }),
       });
       if (res.status === 404) { setJoinError("Комната не найдена"); setLoading(false); return; }
       if (!res.ok) { setJoinError("Ошибка входа"); setLoading(false); return; }
