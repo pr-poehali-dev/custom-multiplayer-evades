@@ -26,7 +26,6 @@ interface TeamPlayer {
 interface Props {
   character: CharDef;
   onBack: () => void;
-  onStartSolo: () => void;
 }
 
 function generateLocalCode(): string {
@@ -54,7 +53,7 @@ export default function TeamLobby({ character, onBack }: Props) {
 
   const pollRoom = useCallback(async (code: string) => {
     try {
-      const res = await fetch(`${ROOMS_URL}/rooms/${code}`, {
+      const res = await fetch(`${ROOMS_URL}/${code}`, {
         headers: { "X-Player-Id": playerId.current },
       });
       if (!res.ok) return;
@@ -75,10 +74,10 @@ export default function TeamLobby({ character, onBack }: Props) {
     setLoading(true); setError("");
     try {
       const code = generateLocalCode();
-      const res = await fetch(`${ROOMS_URL}/rooms`, {
+      const res = await fetch(`${ROOMS_URL}/`, {
         method: "POST",
         headers: { "Content-Type": "application/json", "X-Player-Id": playerId.current },
-        body: JSON.stringify({ character: { id: character.id, name: character.name, color: character.color }, code }),
+        body: JSON.stringify({ character: { id: character.id, name: character.name, color: character.color } }),
       });
       if (!res.ok) { setError("Ошибка создания комнаты"); setLoading(false); return; }
       const data = await res.json();
@@ -97,7 +96,7 @@ export default function TeamLobby({ character, onBack }: Props) {
     if (code.length !== 6) { setJoinError("Код должен быть 6 символов"); return; }
     setLoading(true); setJoinError(""); setError("");
     try {
-      const res = await fetch(`${ROOMS_URL}/rooms/join`, {
+      const res = await fetch(`${ROOMS_URL}/join`, {
         method: "POST",
         headers: { "Content-Type": "application/json", "X-Player-Id": playerId.current },
         body: JSON.stringify({ code, character: { id: character.id, name: character.name, color: character.color } }),

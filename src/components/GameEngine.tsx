@@ -32,9 +32,9 @@ const TELEPORT_MAX_DIST = 200;
 
 function makeRoom(lvl: number): Room { return { width: 1800 + lvl * 250 }; }
 
-function makeBalls(room: Room, lvl: number): Ball[] {
-  const count = 3 + lvl * 2;
-  const speed = 0.7 + lvl * 0.18;
+function makeBalls(room: Room): Ball[] {
+  const count = 8 + Math.floor(Math.random() * 5); // 8–12
+  const speed = 1.1;
   const balls: Ball[] = [];
   for (let i = 0; i < count; i++) {
     const minX = SAFE_ZONE + BALL_R, maxX = room.width - SAFE_ZONE - BALL_R;
@@ -42,8 +42,8 @@ function makeBalls(room: Room, lvl: number): Ball[] {
       id: i,
       x: minX + Math.random() * (maxX - minX),
       y: BALL_R + Math.random() * (CORRIDOR_H - BALL_R * 2),
-      vx: (Math.random() > 0.5 ? 1 : -1) * (speed + Math.random() * speed * 0.4),
-      vy: (Math.random() > 0.5 ? 1 : -1) * (speed * 0.7 + Math.random() * speed * 0.3),
+      vx: (Math.random() > 0.5 ? 1 : -1) * (speed + Math.random() * 0.3),
+      vy: (Math.random() > 0.5 ? 1 : -1) * (speed * 0.6 + Math.random() * 0.3),
       r: BALL_R,
     });
   }
@@ -106,7 +106,7 @@ export default function GameEngine({ character, onBack, roomCode, playerId }: Pr
   const initRoom = useCallback((lvl: number) => {
     const room = makeRoom(lvl);
     const g = st.current;
-    g.room = room; g.balls = makeBalls(room, lvl);
+    g.room = room; g.balls = makeBalls(room);
     g.px = 80; g.py = CORRIDOR_H / 2; g.vx = 0; g.vy = 0;
     g.camX = Math.max(CANVAS_W / 2, 80);
     g.dead = false; g.level = lvl; g.timeFrozen = false;
@@ -158,7 +158,7 @@ export default function GameEngine({ character, onBack, roomCode, playerId }: Pr
     const pushState = async () => {
       const g = st.current;
       try {
-        await fetch(`${ROOMS_URL}/rooms/state`, {
+        await fetch(`${ROOMS_URL}/state`, {
           method: "PUT",
           headers: { "Content-Type": "application/json", "X-Player-Id": playerId },
           body: JSON.stringify({ code: roomCode, px: Math.round(g.px), py: Math.round(g.py), dead: g.dead }),
@@ -168,7 +168,7 @@ export default function GameEngine({ character, onBack, roomCode, playerId }: Pr
 
     const pollState = async () => {
       try {
-        const res = await fetch(`${ROOMS_URL}/rooms/${roomCode}`, {
+        const res = await fetch(`${ROOMS_URL}/${roomCode}`, {
           headers: { "X-Player-Id": playerId },
         });
         if (!res.ok) return;
@@ -227,7 +227,10 @@ export default function GameEngine({ character, onBack, roomCode, playerId }: Pr
         if (character.id === "red") {
           // boost: check cooldown before activating
           const cdEnd = g.cooldowns[ab1id] ?? 0;
-          if (now2 < cdEnd) return; // on cooldown
+          if (now2 < cdEnd) return;
+          // Нельзя включить boost если brownflow активен
+          const brownAbNow = g.abilities.find(a => a.id === "brownflow");
+          if (brownAbNow?.active) return;
           ab.active = !ab.active;
           const active = ab.active;
           if (active) g.abilityTimers[ab1id] = now2;
@@ -253,7 +256,9 @@ export default function GameEngine({ character, onBack, roomCode, playerId }: Pr
           const worldMouseY = g.mouseY - CORRIDOR_TOP;
           const dx = worldMouseX - g.px, dy = worldMouseY - g.py;
           const dist = Math.sqrt(dx * dx + dy * dy);
-          const clampedDist = Math.min(dist, TELEPORT_MAX_DIST);
+          // Дальность телепорта: 1/2/3/4/5 клеток = 40/80/120/160/200px
+          const tpMaxDist = ab.level * 40;
+          const clampedDist = Math.min(dist, tpMaxDist);
           const ratio = dist > 0 ? clampedDist / dist : 0;
           let newX = g.px + dx * ratio;
           let newY = g.py + dy * ratio;
@@ -261,8 +266,8 @@ export default function GameEngine({ character, onBack, roomCode, playerId }: Pr
           newY = Math.max(PLAYER_R, Math.min(CORRIDOR_H - PLAYER_R, newY));
           g.px = newX; g.py = newY; g.vx = 0; g.vy = 0;
           g.mana = Math.max(0, g.mana - 5);
-          // Cooldown: 5 - (level - 1) seconds, level 1->5s, 2->4s, 3->3s, 4->2s, 5->1s
-          const tpCdSec = Math.max(1, 5 - (ab.level - 1));
+          // Cooldown: 5/4/3/2/1 секунды
+          const tpCdSec = Math.max(1, 6 - ab.level);
           g.cooldowns[ab1id] = now2 + tpCdSec * 1000;
         }
       }
@@ -279,6 +284,9 @@ export default function GameEngine({ character, onBack, roomCode, playerId }: Pr
           // brownflow: check cooldown before activating
           const cdEnd = g.cooldowns[ab2id] ?? 0;
           if (now2 < cdEnd) return;
+          // Нельзя включить brownflow если boost активен
+          const boostAbNow = g.abilities.find(a => a.id === "boost");
+          if (!ab.active && boostAbNow?.active) return;
           const wasActive = ab.active;
           ab.active = !ab.active;
           const active = ab.active;
@@ -293,6 +301,8 @@ export default function GameEngine({ character, onBack, roomCode, playerId }: Pr
           setStats(prev => ({ ...prev, abilities: prev.abilities.map(a => a.id === ab2id ? { ...a, active } : a) }));
         }
         if (character.id === "blue") {
+          const cdEnd2 = g.cooldowns[ab2id] ?? 0;
+          if (now2 < cdEnd2) return;
           if (g.mana < 30 || g.timeFrozen) return;
           g.mana = Math.max(0, g.mana - 30);
           g.timeFrozen = true;
@@ -325,7 +335,12 @@ export default function GameEngine({ character, onBack, roomCode, playerId }: Pr
         setTimeFrozen(false);
         const ab2id = character.abilities[1]?.id;
         if (ab2id) {
+          const tfAb = g.abilities.find(a => a.id === ab2id);
           g.abilities.forEach(a => { if (a.id === ab2id) a.active = false; });
+          // Кулдаун таймстопа по уровню: 30/25/20/10/5 сек
+          const tfCDs = [30, 25, 20, 10, 5];
+          const tfCdSec = tfCDs[Math.max(0, (tfAb?.level ?? 1) - 1)] ?? 30;
+          g.cooldowns[ab2id] = now + tfCdSec * 1000;
           setStats(prev => ({ ...prev, abilities: prev.abilities.map(a => a.id === ab2id ? { ...a, active: false } : a) }));
         }
       }
@@ -392,6 +407,8 @@ export default function GameEngine({ character, onBack, roomCode, playerId }: Pr
         g.camX = Math.max(minCam, Math.min(maxCam > minCam ? maxCam : minCam, g.px));
 
         // Collision
+        const brownAbC = g.abilities.find(a => a.id === "brownflow");
+        const brownImmortal = brownAbC?.active ?? false;
         if (g.timeFrozen && character.id === "blue") {
           // Таймстоп: физическое столкновение без смерти — отталкиваем игрока
           for (const b of g.balls) {
@@ -403,19 +420,14 @@ export default function GameEngine({ character, onBack, roomCode, playerId }: Pr
               const overlap = minDist - dist;
               g.px += nx * overlap;
               g.py += ny * overlap;
-              // Гасим скорость в направлении шара
               const dot = g.vx * nx + g.vy * ny;
-              if (dot < 0) {
-                g.vx -= dot * nx;
-                g.vy -= dot * ny;
-              }
+              if (dot < 0) { g.vx -= dot * nx; g.vy -= dot * ny; }
             }
           }
-          // Пережимаем в коридор после столкновений
           g.py = Math.max(PLAYER_R, Math.min(CORRIDOR_H - PLAYER_R, g.py));
           if (g.px < PLAYER_R) { g.px = PLAYER_R; g.vx = 0; }
           if (g.px > room.width - PLAYER_R) { g.px = room.width - PLAYER_R; g.vx = 0; }
-        } else if (!g.timeFrozen) {
+        } else if (!g.timeFrozen && !brownImmortal) {
           for (const b of g.balls) {
             const dx = b.x - g.px, dy = b.y - g.py;
             if (Math.sqrt(dx * dx + dy * dy) < b.r + PLAYER_R) {
@@ -523,7 +535,8 @@ export default function GameEngine({ character, onBack, roomCode, playerId }: Pr
           const wmx = g.mouseX - camOffX2, wmy = g.mouseY - corrTop;
           const dx2 = wmx - g.px, dy2 = wmy - g.py;
           const dist2 = Math.sqrt(dx2 * dx2 + dy2 * dy2);
-          const clamped = Math.min(dist2, TELEPORT_MAX_DIST);
+          const tpMaxDist2 = (ab1?.level ?? 1) * 40;
+          const clamped = Math.min(dist2, tpMaxDist2);
           const ratio = dist2 > 0 ? clamped / dist2 : 0;
           const tpX = g.px + dx2 * ratio;
           const tpY = Math.max(PLAYER_R, Math.min(CORRIDOR_H - PLAYER_R, g.py + dy2 * ratio));
@@ -662,8 +675,8 @@ export default function GameEngine({ character, onBack, roomCode, playerId }: Pr
   const TOOLTIPS: Record<string, string> = {
     boost: "Ускорение потока\n+2/3/4/5/6 скорости\nТратит: 2 маны/с",
     brownflow: "Коричневый поток\nМощный поток силы\nТратит: 12 маны/с\nОткат после выкл: 1.25/1/0.75/0.5/0.25 с",
-    teleport: "Телепорт на курсор\nМакс. 5 клеток (200px)\nСтоит: 5 маны\nПерезарядка: 5/4/3/2/1 с",
-    timefreeze: "Остановка времени\n5 секунд\nСтоит: 30 маны\nОтключает телепорт",
+    teleport: "Телепорт на курсор\nДальность: 1/2/3/4/5 клеток\nСтоит: 5 маны\nПерезарядка: 5/4/3/2/1 с",
+    timefreeze: "Остановка времени\n5 секунд\nСтоит: 30 маны\nПерезарядка: 30/25/20/10/5 с",
   };
 
   return (
